@@ -1,4 +1,9 @@
 #
+# Repo Specific settings
+#
+cmd/batcher/batcher
+
+#
 # go language
 # * https://raw.githubusercontent.com/github/gitignore/refs/heads/main/Go.gitignore
 #
