@@ -1,2 +1,3 @@
 # telemetry-test-tools
-SUSE Telemetry Testing Tools
+A repo containing tools developed to assist in the testing of the SUSE
+Telemetry service.

@@ -1,0 +1,27 @@
+go_coverage_profile ?= /tmp/.coverage.out
+
+.PHONY: fmt vet build build-only clean test-clean test-verbose test-coverage mod-tidy mod-download mod-update test-mod-update
+
+fmt:
+	go fmt ./...
+
+vet:
+	go vet ./...
+
+build-only:
+	go build ./...
+
+build: vet build-only
+
+clean:: test-clean
+	go clean ./...
+
+test-clean:
+	go clean -testcache
+
+test test-verbose: test-clean build
+	go test $(if $(findstring verbose,$@),-v) -cover -coverprofile=$(go_coverage_profile) ./...
+
+test-verbose-old: test-clean build
+	go test -v -cover -coverprofile=$(go_coverage_profile) ./...
+
