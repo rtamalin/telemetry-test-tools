@@ -3,83 +3,17 @@ package main
 import (
 	"bytes"
 	"flag"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/rtamalin/telemetry-test-tools/pkg/bgqueue"
+	"github.com/rtamalin/telemetry-test-tools/pkg/bgqueue/bgjob"
 )
 
 var appStart time.Time
-
-type BackgroundJob struct {
-	Id         int           // job id
-	Name       string        // job name
-	Created    time.Time     // time at which the job was created
-	Started    time.Time     // time at which the job started
-	Duration   time.Duration // how long the job took to run
-	Stdout     string        // stdout, if any, from the job
-	Stderr     string        // stderr, if any, from the job
-	ExitStatus int           // the exit status of the job itself
-	Error      error         // the error returned from the exec.Cmd.Run()
-	CmdError   error         // the error found in exec.Cmd.Err
-}
-
-func (bj *BackgroundJob) printBanner(subFmt string, subArgs ...any) {
-	args := append([]any{bj.Name}, subArgs...)
-
-	fmt.Printf("[%s "+subFmt+"]\n", args...)
-}
-
-// Print BackgroundJob results
-func (bj *BackgroundJob) Print() {
-	// calculate time deltas
-	jobCreatedDelta := bj.Created.Sub(appStart)
-	jobStartDelta := bj.Started.Sub(bj.Created)
-
-	if bj.Error != nil {
-		bj.printBanner("job failed")
-		fmt.Printf("Command: %s\n", strings.Join(options.Command, " "))
-		fmt.Printf("Error: %s\n", bj.Error.Error())
-		if bj.CmdError != nil {
-			fmt.Printf("Cmd.Err: %s", bj.CmdError)
-		}
-
-		return
-	}
-
-	if bj.Stdout != "" {
-		bj.printBanner("job stdout")
-		fmt.Printf("%s", bj.Stdout)
-		// append a newline if the string doesn't end with one
-		if !strings.HasSuffix(bj.Stdout, "\n") {
-			fmt.Println()
-		}
-	} else {
-		bj.printBanner("job stdout empty")
-	}
-
-	if bj.Stderr != "" {
-		bj.printBanner("job stderr")
-		fmt.Printf("%s", bj.Stderr)
-		// append a newline if the string doesn't end with one
-		if !strings.HasSuffix(bj.Stderr, "\n") {
-			fmt.Println()
-		}
-	} else {
-		bj.printBanner("job stderr empty")
-	}
-
-	bj.printBanner(
-		"job times: +% 10.6fs -> +% 10.6fs (% 10.6fs)",
-		jobCreatedDelta.Seconds(),
-		jobStartDelta.Seconds(),
-		bj.Duration.Seconds(),
-	)
-	bj.printBanner("job exit status %d", bj.ExitStatus)
-}
 
 // Options
 type Options struct {
@@ -95,8 +29,9 @@ var option_defaults = Options{
 	Batch:  10,
 	Prefix: "bgjob",
 	Command: []string{
-		"sleep",
-		"1",
+		"echo",
+		"Hello",
+		"World",
 	},
 }
 
@@ -107,22 +42,19 @@ var options Options
 type jobSlot struct{}
 
 func runBackgroundJob(
-	jobId int,
+	job *bgjob.BackgroundJob,
 	slot chan jobSlot, // semaphore to limit concurrency
 	jobGroup *sync.WaitGroup, // WaitGroup for completion signalling
-	resultQueue chan<- BackgroundJob, // Queue (channel) where results are sent
+	resultQueue chan<- *bgjob.BackgroundJob, // Queue (channel) where results are sent
 ) {
-	// create the job, recording the creation time
-	job := BackgroundJob{
-		Id:      jobId,
-		Created: time.Now(),
-	}
-
-	// generate the job name
-	job.Name = fmt.Sprintf("%s_%06d", options.Prefix, jobId)
-
 	// ensure WaitGroup is signalled when routine finishes
 	defer jobGroup.Done()
+
+	// create the job, recording the creation time
+	//job := NewBackgroundJob(jobId, "bgjob", options.Command)
+
+	// job is ready to run
+	job.MarkReady()
 
 	// acquire a job slot from the semaphore and ensure we release it when
 	// the routine finishes
@@ -134,7 +66,7 @@ func runBackgroundJob(
 
 	// create a Command struct to manage running the command, using
 	// Buffers for the stdout and stderr
-	cmd := exec.Command(options.Command[0], options.Command[1:]...)
+	cmd := exec.Command(job.Command[0], job.Command[1:]...)
 	cmd.Stdout = new(bytes.Buffer)
 	cmd.Stderr = new(bytes.Buffer)
 
@@ -208,61 +140,27 @@ func main() {
 		options.Command = option_defaults.Command
 	}
 
-	// allocate a channel with options.Batch jobSlots to act as a semaphore
-	jobSlots := make(chan jobSlot, options.Batch)
+	bgQueue := bgqueue.New(
+		options.Total,
+		options.Batch,
+		"bgjob",
+		options.Command,
+	)
 
-	// allocate a channel with sufficient entries to hold options.Total
-	// BackgroundJob results
-	jobResults := make(chan BackgroundJob, options.Total)
+	bgQueue.Run()
 
-	// allocate a sync.WaitGroup to track background jobs completions
-	jobGroup := new(sync.WaitGroup)
-
-	appStart = time.Now()
-	slog.Info("Starting background jobs", slog.Int("Batch", options.Batch), slog.Int("Total", options.Total))
-
-	// create options.Total go routines to run the background jobs,
-	// limiting how many actually run at a given time to options.Batch
-	for jobId := 0; jobId < options.Total; jobId++ {
-		// track that we are starting a new job
-		jobGroup.Add(1)
-
-		// create a go routine to run the background job
-		go runBackgroundJob(jobId+1, jobSlots, jobGroup, jobResults)
+	for _, job := range bgQueue.Jobs {
+		job.Print(false)
 	}
 
-	go func() {
-		jobGroup.Wait()
-		close(jobResults)
-	}()
-
-	var totalDuration time.Duration = 0
-	var minDuration time.Duration = 0
-	var maxDuration time.Duration = 0
-	var completed int = 0
-	for job := range jobResults {
-		job.Print()
-		completed += 1
-		slog.Info("Progress", slog.Int("Remaining", options.Total-completed))
-
-		totalDuration += job.Duration
-
-		if (job.Duration < minDuration) || (minDuration == 0) {
-			minDuration = job.Duration
-		}
-
-		if job.Duration > maxDuration {
-			maxDuration = job.Duration
-		}
-	}
-
-	totalTime := time.Now().Sub(appStart).Seconds()
+	bgqStats := bgQueue.Stats
 	slog.Info(
 		"Times",
-		slog.Float64("Total Time (s)", totalTime),
-		slog.Float64("Completion Rate (job/s)", 1.0/(totalTime/float64(options.Total))),
-		slog.Float64("Average Job Duration (s)", totalDuration.Seconds()/float64(options.Total)),
-		slog.Float64("Min Job Duration (s)", minDuration.Seconds()),
-		slog.Float64("Max Job Duration (s)", maxDuration.Seconds()),
+		slog.Float64("Active (Wallclock) Time (s)", bgqStats.ActiveTime.Seconds()),
+		slog.Float64("Aggregate Time (s)", bgqStats.AggregateTime.Seconds()),
+		slog.Float64("Completion Rate (job/s)", bgqStats.CompletionRate()),
+		slog.Float64("Average Job Duration (s)", bgqStats.AverageRunTime().Seconds()),
+		slog.Float64("Min Job Duration (s)", bgqStats.MinimumRunTime().Seconds()),
+		slog.Float64("Max Job Duration (s)", bgqStats.MaximumRunTime().Seconds()),
 	)
 }
