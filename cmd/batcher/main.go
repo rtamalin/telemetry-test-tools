@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -73,7 +74,7 @@ func runBackgroundJob(
 	// run the specified command and wait for it to complete,
 	// recording the time at which it finished
 	job.Error = cmd.Run()
-	job.Duration = time.Now().Sub(job.Started)
+	job.Duration = time.Since(job.Started)
 
 	// record the stdout and stderr
 	job.Stdout = cmd.Stdout.(*bytes.Buffer).String()
@@ -154,13 +155,27 @@ func main() {
 	}
 
 	bgqStats := bgQueue.Stats
-	slog.Info(
+	slog.Debug(
 		"Times",
-		slog.Float64("Active (Wallclock) Time (s)", bgqStats.ActiveTime.Seconds()),
-		slog.Float64("Aggregate Time (s)", bgqStats.AggregateTime.Seconds()),
 		slog.Float64("Completion Rate (job/s)", bgqStats.CompletionRate()),
+		slog.Float64("Active (Wallclock) Time (s)", bgqStats.ActiveTime.Seconds()),
+		slog.Float64("Aggregate Time (s)", bgqStats.AggregateRunTime().Seconds()),
 		slog.Float64("Average Job Duration (s)", bgqStats.AverageRunTime().Seconds()),
 		slog.Float64("Min Job Duration (s)", bgqStats.MinimumRunTime().Seconds()),
 		slog.Float64("Max Job Duration (s)", bgqStats.MaximumRunTime().Seconds()),
 	)
+
+	fmt.Printf("Summary:\n")
+	fmt.Printf("  %-23s: %10d\n", "Total Jobs", options.Total)
+	fmt.Printf("  %-23s: %10d\n", "Batch Size", options.Batch)
+	fmt.Printf("  %-23s: %10.3f %%\n", "Success Rate", bgqStats.SuccessPercentage())
+	fmt.Printf("  %-23s: %10.3f jobs/s\n", "Completion Rate", bgqStats.CompletionRate())
+	fmt.Printf("  %-23s: %10.3f s\n", "Active (Wallclock) Time", bgqStats.ActiveTime.Seconds())
+	fmt.Printf("  %-23s: %10.3f s\n", "Aggregate Job Time", bgqStats.AggregateRunTime().Seconds())
+	fmt.Printf("  %-23s: %10.3f s\n", "Average Job Time", bgqStats.AverageRunTime().Seconds())
+	fmt.Printf("  %-23s: %10.3f s\n", "Minimum Job Time", bgqStats.MinimumRunTime().Seconds())
+	fmt.Printf("  %-23s: %10.3f s\n", "Maximum Job Time", bgqStats.MaximumRunTime().Seconds())
+	fmt.Printf("  %-23s: %10.3f s\n", "Job Time Variance", bgqStats.Variance().Seconds())
+	fmt.Printf("  %-23s: %10.3f s\n", "Job Time StdDev", bgqStats.StdDev().Seconds())
+	fmt.Printf("  %-23s: %10.3f s\n", "Job Time RMS", bgqStats.RootMeanSquare().Seconds())
 }

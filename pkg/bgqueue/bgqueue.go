@@ -170,7 +170,8 @@ type ProgressCallback func(bq *BgQueue, bj *bgjob.BackgroundJob)
 
 func Progress(bq *BgQueue, bj *bgjob.BackgroundJob) {
 	fmt.Printf(
-		"Progress: complete=%6d(%6.2f%%) fail=%6d(%6.2f%%) success=%6d(%6.2f%%)\n",
+		"Progress: delta=%12.6fs complete=%6d(%6.2f%%) fail=%6d(%6.2f%%) success=%6d(%6.2f%%)\n",
+		time.Since(bq.QueueStart).Seconds(),
 		bq.Stats.Completed,
 		bq.Stats.CompletionPercentage(),
 		bq.Stats.Failed,
